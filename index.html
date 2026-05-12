@@ -135,8 +135,10 @@
     "esri/Map",
     "esri/views/MapView",
     "esri/layers/TileLayer",
-    "esri/layers/FeatureLayer"
-  ], function(Map, MapView, TileLayer, FeatureLayer) {
+    "esri/layers/FeatureLayer",
+    "esri/layers/WebTileLayer",
+    "esri/Basemap"
+  ], function(Map, MapView, TileLayer, FeatureLayer, WebTileLayer, Basemap) {
 
     var idwLayer = new TileLayer({ url: TILE_URL, opacity: 1, visible: false });
 
@@ -153,7 +155,7 @@
     });
 
     var map = new Map({
-      basemap: "osm",
+      basemap: "arcgis/light-gray",
       layers: [idwLayer, borderLayer]
     });
 
