@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Real Estate Prices — Vračar 2025</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css">
+  <script src="https://js.arcgis.com/4.29/"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --c-bg: #f4f1ec;
+      --c-surface: #faf8f5;
+      --c-border: rgba(0,0,0,0.1);
+      --c-text: #1a1a18;
+      --c-muted: #6b6860;
+      --font-sans: 'DM Sans', sans-serif;
+      --font-mono: 'DM Mono', monospace;
+      --radius: 10px;
+    }
+
+    html, body { height: 100%; background: var(--c-bg); font-family: var(--font-sans); color: var(--c-text); overflow: hidden; }
+    #app { display: flex; flex-direction: column; height: 100vh; }
+
+    #header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 13px 20px; background: var(--c-surface);
+      border-bottom: 1px solid var(--c-border); flex-shrink: 0; gap: 20px;
+    }
+    #header-left { display: flex; flex-direction: column; gap: 1px; }
+    #header h1 { font-size: 13px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
+    #header p { font-size: 11px; color: var(--c-muted); font-family: var(--font-mono); }
+
+    #controls { display: flex; align-items: center; gap: 28px; }
+    .control-group { display: flex; flex-direction: column; gap: 4px; }
+    .control-label { font-size: 10px; font-family: var(--font-mono); color: var(--c-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    .control-row { display: flex; align-items: center; gap: 10px; }
+    .control-value { font-size: 13px; font-family: var(--font-mono); font-weight: 500; min-width: 36px; text-align: right; }
+
+    input[type="range"] {
+      -webkit-appearance: none; appearance: none;
+      height: 3px; background: var(--c-border); border-radius: 2px;
+      outline: none; cursor: pointer; width: 120px;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px;
+      border-radius: 50%; background: var(--c-text);
+      border: 2px solid var(--c-surface); box-shadow: 0 0 0 1px var(--c-text); cursor: pointer;
+    }
+
+    #map-wrap { position: relative; flex: 1; cursor: none; }
+    #map { position: absolute; inset: 0; }
+    #lens-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+
+    #legend {
+      position: absolute; bottom: 28px; left: 20px; z-index: 20;
+      background: var(--c-surface); border: 1px solid var(--c-border);
+      border-radius: var(--radius); padding: 12px 16px;
+    }
+    .leg-title { font-size: 10px; font-family: var(--font-mono); color: var(--c-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+    .leg-bar { width: 140px; height: 7px; border-radius: 3px; margin-bottom: 5px; background: linear-gradient(to right, #2c7bb6, #abd9e9, #ffffbf, #fdae61, #d7191c); }
+    .leg-labels { display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--c-muted); }
+
+    #price-readout {
+      position: absolute; z-index: 30; pointer-events: none;
+      display: none; transform: translate(14px, -50%);
+    }
+    #price-readout-inner {
+      background: var(--c-text); color: white;
+      font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+      padding: 5px 10px; border-radius: 6px; white-space: nowrap; letter-spacing: 0.02em;
+    }
+    #price-readout-inner span { opacity: 0.6; font-weight: 400; margin-left: 3px; font-size: 10px; }
+
+    #hint {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      z-index: 20; background: var(--c-surface); border: 1px solid var(--c-border);
+      border-radius: 20px; padding: 6px 14px; font-size: 11px; color: var(--c-muted);
+      font-family: var(--font-mono); pointer-events: none; transition: opacity 0.4s;
+    }
+    #hint.hidden { opacity: 0; }
+
+    .esri-attribution { display: none !important; }
+    .esri-zoom { bottom: 28px !important; right: 20px !important; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <div id="header">
+    <div id="header-left">
+      <h1>Real Estate Prices — Vračar 2025</h1>
+      <p>IDW interpolation · hover to explore</p>
+    </div>
+    <div id="controls">
+      <div class="control-group">
+        <div class="control-label">Lens size</div>
+        <div class="control-row">
+          <input type="range" id="lens-slider" min="40" max="160" step="5" value="80">
+          <span class="control-value" id="lens-val">80</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="map-wrap">
+    <div id="map"></div>
+    <canvas id="lens-canvas"></canvas>
+    <div id="legend">
+      <div class="leg-title">€ / m²</div>
+      <div class="leg-bar"></div>
+      <div class="leg-labels"><span>1.750</span><span>5.300</span><span>8.861</span></div>
+    </div>
+    <div id="price-readout">
+      <div id="price-readout-inner">— <span>€/m²</span></div>
+    </div>
+    <div id="hint">Move cursor over the map to reveal prices</div>
+  </div>
+
+</div>
+
+<script>
+require([
+  "esri/Map",
+  "esri/views/MapView",
+  "esri/layers/ImageryTileLayer",
+  "esri/layers/FeatureLayer"
+], function(Map, MapView, ImageryTileLayer, FeatureLayer) {
+
+  const IMAGE_SERVER_URL = "https://iservices7.arcgis.com/eO5e0cIdutJqUkDY/arcgis/rest/services/IDW/ImageServer";
+  const BORDER_URL = "https://services7.arcgis.com/eO5e0cIdutJqUkDY/arcgis/rest/services/Border/FeatureServer";
+
+  const idwLayer = new ImageryTileLayer({
+    url: IMAGE_SERVER_URL,
+    opacity: 1,
+    visible: false
+  });
+
+  const borderLayer = new FeatureLayer({
+    url: BORDER_URL,
+    renderer: {
+      type: "simple",
+      symbol: {
+        type: "simple-fill",
+        color: [0, 0, 0, 0],
+        outline: { color: [30, 30, 28, 0.7], width: 1.5 }
+      }
+    }
+  });
+
+  const map = new Map({
+    basemap: "arcgis/light-gray",
+    layers: [idwLayer, borderLayer]
+  });
+
+  const view = new MapView({
+    container: "map",
+    map: map,
+    center: [20.472, 44.798],
+    zoom: 14,
+    ui: { components: ["zoom"] }
+  });
+
+  const lensC = document.getElementById("lens-canvas");
+  const mw = document.getElementById("map-wrap");
+  const priceReadout = document.getElementById("price-readout");
+  const priceInner = document.getElementById("price-readout-inner");
+  const hint = document.getElementById("hint");
+
+  let lensR = 80;
+  let mouseX = -1, mouseY = -1;
+  let hintHidden = false;
+  let identifying = false;
+
+  function resize() {
+    lensC.width = mw.offsetWidth;
+    lensC.height = mw.offsetHeight;
+  }
+  resize();
+  window.addEventListener("resize", resize);
+
+  function drawLens() {
+    const ctx = lensC.getContext("2d");
+    ctx.clearRect(0, 0, lensC.width, lensC.height);
+    if (mouseX < 0) return;
+
+    const R = lensR;
+    const mx = mouseX, my = mouseY;
+
+    idwLayer.visible = true;
+
+    view.takeScreenshot({ quality: 90, width: lensC.width, height: lensC.height })
+      .then(function(screenshot) {
+        idwLayer.visible = false;
+
+        const img = new Image();
+        img.onload = function() {
+          ctx.clearRect(0, 0, lensC.width, lensC.height);
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(mx, my, R, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(img, 0, 0);
+          ctx.restore();
+
+          ctx.beginPath();
+          ctx.arc(mx, my, R, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(255,255,255,0.88)";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.strokeStyle = "rgba(0,0,0,0.15)";
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+
+          ctx.save();
+          ctx.strokeStyle = "rgba(255,255,255,0.65)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(mx - 10, my); ctx.lineTo(mx + 10, my);
+          ctx.moveTo(mx, my - 10); ctx.lineTo(mx, my + 10);
+          ctx.stroke();
+          ctx.restore();
+
+          ctx.beginPath();
+          ctx.arc(mx, my, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = "white";
+          ctx.fill();
+        };
+        img.src = screenshot.dataUrl;
+      });
+  }
+
+  function identifyPrice(mapPoint) {
+    if (identifying) return;
+    identifying = true;
+
+    idwLayer.identify(mapPoint)
+      .then(function(result) {
+        identifying = false;
+        if (result && result.value !== null && result.value !== undefined) {
+          const price = Math.round(parseFloat(result.value));
+          if (!isNaN(price) && price > 0 && price < 99999) {
+            priceInner.innerHTML = `${price.toLocaleString("sr-RS")} <span>€/m²</span>`;
+          } else {
+            priceInner.innerHTML = `— <span>€/m²</span>`;
+          }
+        } else {
+          priceInner.innerHTML = `— <span>€/m²</span>`;
+        }
+      })
+      .catch(function() {
+        identifying = false;
+        priceInner.innerHTML = `— <span>€/m²</span>`;
+      });
+  }
+
+  let drawTimeout = null;
+  let identifyTimeout = null;
+
+  mw.addEventListener("mousemove", function(e) {
+    const rect = mw.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+
+    priceReadout.style.display = "block";
+    priceReadout.style.left = mouseX + "px";
+    priceReadout.style.top = mouseY + "px";
+
+    if (!hintHidden) {
+      hint.classList.add("hidden");
+      hintHidden = true;
+    }
+
+    if (drawTimeout) clearTimeout(drawTimeout);
+    drawTimeout = setTimeout(drawLens, 80);
+
+    if (identifyTimeout) clearTimeout(identifyTimeout);
+    identifyTimeout = setTimeout(function() {
+      const mapPoint = view.toMap({ x: mouseX, y: mouseY });
+      if (mapPoint) identifyPrice(mapPoint);
+    }, 120);
+  });
+
+  mw.addEventListener("mouseleave", function() {
+    mouseX = -1; mouseY = -1;
+    priceReadout.style.display = "none";
+    lensC.getContext("2d").clearRect(0, 0, lensC.width, lensC.height);
+  });
+
+  view.watch("stationary", function(stationary) {
+    if (stationary && mouseX >= 0) drawLens();
+  });
+
+  const lensSlider = document.getElementById("lens-slider");
+  const lensVal = document.getElementById("lens-val");
+  lensSlider.addEventListener("input", function() {
+    lensR = parseInt(this.value);
+    lensVal.textContent = lensR;
+    if (mouseX >= 0) drawLens();
+  });
+
+});
+</script>
+</body>
+</html>
