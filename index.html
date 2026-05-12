@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"/>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -38,7 +38,11 @@
     input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--c-text); border: 2px solid var(--c-surface); box-shadow: 0 0 0 1px var(--c-text); cursor: pointer; }
 
     #map-wrap { position: relative; flex: 1; cursor: none; }
-    #map { position: absolute; inset: 0; }
+
+    /* Two stacked maps */
+    #map-base { position: absolute; inset: 0; z-index: 1; }
+    #map-idw  { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+
     #lens-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
 
     #legend {
@@ -51,14 +55,14 @@
     .leg-labels { display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--c-muted); }
 
     #price-readout { position: absolute; z-index: 30; pointer-events: none; display: none; transform: translate(14px, -50%); }
-    #price-readout-inner { background: var(--c-text); color: white; font-family: var(--font-mono); font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 6px; white-space: nowrap; letter-spacing: 0.02em; }
+    #price-readout-inner { background: var(--c-text); color: white; font-family: var(--font-mono); font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 6px; white-space: nowrap; }
     #price-readout-inner span { opacity: 0.6; font-weight: 400; margin-left: 3px; font-size: 10px; }
 
     #hint { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 20; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 20px; padding: 6px 14px; font-size: 11px; color: var(--c-muted); font-family: var(--font-mono); pointer-events: none; transition: opacity 0.4s; }
     #hint.hidden { opacity: 0; }
 
-    .esri-attribution { display: none !important; }
-    .esri-zoom { bottom: 28px !important; right: 20px !important; }
+    /* Hide IDW map tiles visually — we only draw them on canvas inside lens */
+    #map-idw { opacity: 0; }
   </style>
 </head>
 <body>
@@ -79,7 +83,8 @@
     </div>
   </div>
   <div id="map-wrap">
-    <div id="map"></div>
+    <div id="map-base"></div>
+    <div id="map-idw"></div>
     <canvas id="lens-canvas"></canvas>
     <div id="legend">
       <div class="leg-title">€ / m²</div>
@@ -91,47 +96,39 @@
   </div>
 </div>
 
-<script src="https://js.arcgis.com/4.29/"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script>
-require([
-  "esri/Map",
-  "esri/views/MapView",
-  "esri/layers/TileLayer",
-  "esri/layers/FeatureLayer",
-  "esri/layers/WebTileLayer",
-  "esri/Basemap"
-], function(Map, MapView, TileLayer, FeatureLayer, WebTileLayer, Basemap) {
+  var IDW_URL    = "https://tiles.arcgis.com/tiles/eO5e0cIdutJqUkDY/arcgis/rest/services/IDW_clipped/MapServer/tile/{z}/{y}/{x}";
+  var BORDER_URL = "https://services7.arcgis.com/eO5e0cIdutJqUkDY/arcgis/rest/services/Border/FeatureServer/0/query?where=1%3D1&outFields=*&f=geojson";
 
-  var TILE_URL   = "https://tiles.arcgis.com/tiles/eO5e0cIdutJqUkDY/arcgis/rest/services/IDW_clipped/MapServer";
-  var BORDER_URL = "https://services7.arcgis.com/eO5e0cIdutJqUkDY/arcgis/rest/services/Border/FeatureServer";
+  var center = [44.798, 20.472];
 
-  var osmBasemap = new Basemap({
-    baseLayers: [new WebTileLayer({
-      urlTemplate: "https://{subDomain}.tile.openstreetmap.org/{level}/{col}/{row}.png",
-      subDomains: ["a", "b", "c"],
-      copyright: "© OpenStreetMap contributors"
-    })]
+  // Base map — OSM
+  var mapBase = L.map("map-base", { zoomControl: true, attributionControl: false }).setView(center, 14);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    subdomains: ["a","b","c"],
+    maxZoom: 19
+  }).addTo(mapBase);
+
+  // IDW map — synced, hidden (opacity:0 via CSS), tiles still load
+  var mapIdw = L.map("map-idw", { zoomControl: false, attributionControl: false }).setView(center, 14);
+  L.tileLayer(IDW_URL, { maxZoom: 19 }).addTo(mapIdw);
+
+  // Sync IDW map with base map
+  mapBase.on("move zoom", function() {
+    mapIdw.setView(mapBase.getCenter(), mapBase.getZoom(), { animate: false });
   });
 
-  // IDW layer — hidden by default, shown only during screenshot
-  var idwLayer = new TileLayer({ url: TILE_URL, opacity: 1, visible: false });
+  // Add border as GeoJSON overlay on base map
+  fetch(BORDER_URL)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      L.geoJSON(data, {
+        style: { color: "#1a1a18", weight: 1.5, fillOpacity: 0, opacity: 0.75 }
+      }).addTo(mapBase);
+    });
 
-  var borderLayer = new FeatureLayer({
-    url: BORDER_URL,
-    renderer: {
-      type: "simple",
-      symbol: { type: "simple-fill", color: [0,0,0,0], outline: { color: [30,30,28,0.75], width: 1.5 } }
-    }
-  });
-
-  var map = new Map({ basemap: osmBasemap, layers: [idwLayer, borderLayer] });
-
-  var view = new MapView({
-    container: "map", map: map,
-    center: [20.472, 44.798], zoom: 14,
-    ui: { components: ["zoom"] }
-  });
-
+  // Canvas lens
   var lensC = document.getElementById("lens-canvas");
   var mw    = document.getElementById("map-wrap");
   var priceReadout = document.getElementById("price-readout");
@@ -143,28 +140,20 @@ require([
   resize();
   window.addEventListener("resize", resize);
 
-  // Map IDW raster color to price
-  // ArcGIS default stretch: dark green (low) → yellow-green → yellow → orange → salmon (high)
   function rgbToPrice(r, g, b) {
-    // Check if pixel is from the IDW layer (not nodata/transparent)
-    // IDW colors are relatively saturated; very light pixels are outside the raster
-    var max = Math.max(r, g, b);
-    var min = Math.min(r, g, b);
-    var saturation = max > 0 ? (max - min) / max : 0;
-    if (saturation < 0.08) return null; // unsaturated = nodata or basemap bleed
-
-    var rn = r / 255, gn = g / 255;
-    // Green dominant = low prices, red/pink dominant = high prices
-    var t;
-    if (gn >= rn) {
-      // Green side: t from 0 to 0.5
-      t = (1 - gn) * 0.7;
-    } else {
-      // Red/orange/pink side: t from 0.5 to 1
-      t = 0.5 + rn * 0.5;
-    }
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var sat = max > 0 ? (max - min) / max : 0;
+    if (sat < 0.08) return null;
+    var rn = r/255, gn = g/255;
+    var t = gn >= rn ? Math.max(0, (1-gn) * 0.7) : 0.5 + rn * 0.5;
     t = Math.min(1, Math.max(0, t));
     return Math.round(1750 + t * (8861 - 1750));
+  }
+
+  function getIdwCanvas() {
+    // Get the Leaflet tile canvas/images from the hidden IDW map
+    var idwContainer = document.getElementById("map-idw");
+    return idwContainer;
   }
 
   function drawLens() {
@@ -173,67 +162,56 @@ require([
     if (mouseX < 0) return;
 
     var R = lensR, mx = mouseX, my = mouseY;
+    var mwRect = mw.getBoundingClientRect();
+    var idwEl  = document.getElementById("map-idw");
+    var idwRect = idwEl.getBoundingClientRect();
 
-    // Show IDW, take screenshot, hide IDW
-    idwLayer.visible = true;
+    // Collect all tile images from the IDW Leaflet map
+    var tiles = idwEl.querySelectorAll(".leaflet-tile");
 
-    // Wait for layer to render before screenshotting
-    view.whenLayerView(idwLayer).then(function(lv) {
-      lv.when(function() {
-        view.takeScreenshot({ quality: 95, width: lensC.width, height: lensC.height })
-          .then(function(screenshot) {
-            idwLayer.visible = false;
+    // Draw clipped IDW tiles onto lens canvas
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(mx, my, R, 0, Math.PI * 2);
+    ctx.clip();
 
-            var img = new Image();
-            img.onload = function() {
-              ctx.clearRect(0, 0, lensC.width, lensC.height);
-
-              // Clip IDW to lens circle
-              ctx.save();
-              ctx.beginPath();
-              ctx.arc(mx, my, R, 0, Math.PI * 2);
-              ctx.clip();
-              ctx.drawImage(img, 0, 0);
-              ctx.restore();
-
-              // Sample center area for price
-              var off = document.createElement("canvas");
-              off.width = lensC.width; off.height = lensC.height;
-              var octx = off.getContext("2d");
-              octx.drawImage(img, 0, 0);
-
-              var rSum = 0, gSum = 0, bSum = 0, n = 0, sr = 3;
-              for (var sy = -sr; sy <= sr; sy++) {
-                for (var sx = -sr; sx <= sr; sx++) {
-                  var px = octx.getImageData(Math.round(mx+sx), Math.round(my+sy), 1, 1).data;
-                  rSum += px[0]; gSum += px[1]; bSum += px[2]; n++;
-                }
-              }
-              var price = rgbToPrice(rSum/n, gSum/n, bSum/n);
-              priceInner.innerHTML = price !== null
-                ? "~" + price.toLocaleString("sr-RS") + " <span>\u20ac/m\u00b2</span>"
-                : "\u2014 <span>\u20ac/m\u00b2</span>";
-
-              // Ring
-              ctx.beginPath(); ctx.arc(mx, my, R, 0, Math.PI*2);
-              ctx.strokeStyle = "rgba(255,255,255,0.88)"; ctx.lineWidth = 2; ctx.stroke();
-              ctx.strokeStyle = "rgba(0,0,0,0.15)"; ctx.lineWidth = 0.5; ctx.stroke();
-
-              // Crosshair
-              ctx.save(); ctx.strokeStyle = "rgba(255,255,255,0.65)"; ctx.lineWidth = 1;
-              ctx.beginPath();
-              ctx.moveTo(mx-10, my); ctx.lineTo(mx+10, my);
-              ctx.moveTo(mx, my-10); ctx.lineTo(mx, my+10);
-              ctx.stroke(); ctx.restore();
-
-              // Center dot
-              ctx.beginPath(); ctx.arc(mx, my, 2.5, 0, Math.PI*2);
-              ctx.fillStyle = "white"; ctx.fill();
-            };
-            img.src = screenshot.dataUrl;
-          });
-      });
+    tiles.forEach(function(tile) {
+      if (!tile.complete || tile.naturalWidth === 0) return;
+      var tRect = tile.getBoundingClientRect();
+      var tx = tRect.left - mwRect.left;
+      var ty = tRect.top  - mwRect.top;
+      ctx.drawImage(tile, tx, ty, tRect.width, tRect.height);
     });
+
+    ctx.restore();
+
+    // Sample center pixel for price (from drawn tiles)
+    var sample = ctx.getImageData(Math.round(mx), Math.round(my), 7, 7);
+    var rS=0, gS=0, bS=0, aS=0, n=sample.data.length/4;
+    for (var i=0; i<sample.data.length; i+=4) {
+      rS+=sample.data[i]; gS+=sample.data[i+1]; bS+=sample.data[i+2]; aS+=sample.data[i+3];
+    }
+    var avgA = aS/n;
+    var price = avgA > 30 ? rgbToPrice(rS/n, gS/n, bS/n) : null;
+    priceInner.innerHTML = price !== null
+      ? "~" + price.toLocaleString("sr-RS") + " <span>\u20ac/m\u00b2</span>"
+      : "\u2014 <span>\u20ac/m\u00b2</span>";
+
+    // Ring
+    ctx.beginPath(); ctx.arc(mx, my, R, 0, Math.PI*2);
+    ctx.strokeStyle = "rgba(255,255,255,0.88)"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,0.15)"; ctx.lineWidth = 0.5; ctx.stroke();
+
+    // Crosshair
+    ctx.save(); ctx.strokeStyle = "rgba(255,255,255,0.65)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(mx-10, my); ctx.lineTo(mx+10, my);
+    ctx.moveTo(mx, my-10); ctx.lineTo(mx, my+10);
+    ctx.stroke(); ctx.restore();
+
+    // Center dot
+    ctx.beginPath(); ctx.arc(mx, my, 2.5, 0, Math.PI*2);
+    ctx.fillStyle = "white"; ctx.fill();
   }
 
   var drawTimeout = null;
@@ -250,7 +228,7 @@ require([
     if (!hintHidden) { hint.classList.add("hidden"); hintHidden = true; }
 
     if (drawTimeout) clearTimeout(drawTimeout);
-    drawTimeout = setTimeout(drawLens, 100);
+    drawTimeout = setTimeout(drawLens, 60);
   });
 
   mw.addEventListener("mouseleave", function() {
@@ -259,7 +237,9 @@ require([
     lensC.getContext("2d").clearRect(0, 0, lensC.width, lensC.height);
   });
 
-  view.watch("stationary", function(s) { if (s && mouseX >= 0) drawLens(); });
+  mapBase.on("move zoom moveend", function() {
+    if (mouseX >= 0) { if (drawTimeout) clearTimeout(drawTimeout); drawTimeout = setTimeout(drawLens, 80); }
+  });
 
   var lensSlider = document.getElementById("lens-slider");
   var lensVal    = document.getElementById("lens-val");
@@ -268,7 +248,6 @@ require([
     lensVal.textContent = lensR;
     if (mouseX >= 0) drawLens();
   });
-});
 </script>
 </body>
 </html>
