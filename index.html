@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css">
-  <script src="https://js.arcgis.com/4.29/"></script>
+  <script src="https://js.arcgis.com/4.29/" defer></script>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -65,7 +65,11 @@
       border-radius: var(--radius); padding: 12px 16px;
     }
     .leg-title { font-size: 10px; font-family: var(--font-mono); color: var(--c-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
-    .leg-bar { width: 140px; height: 7px; border-radius: 3px; margin-bottom: 5px; background: linear-gradient(to right, #2c7bb6, #abd9e9, #ffffbf, #fdae61, #d7191c); }
+    .leg-bar {
+      width: 140px; height: 7px; border-radius: 3px; margin-bottom: 5px;
+      background: linear-gradient(to right,
+        #4a7c3f, #7ab648, #c8cc3e, #e8b84b, #d4876a, #c4788a);
+    }
     .leg-labels { display: flex; justify-content: space-between; font-size: 10px; font-family: var(--font-mono); color: var(--c-muted); }
 
     #price-readout {
@@ -130,18 +134,14 @@
 require([
   "esri/Map",
   "esri/views/MapView",
-  "esri/layers/ImageryTileLayer",
+  "esri/layers/TileLayer",
   "esri/layers/FeatureLayer"
-], function(Map, MapView, ImageryTileLayer, FeatureLayer) {
+], function(Map, MapView, TileLayer, FeatureLayer) {
 
-  const IMAGE_SERVER_URL = "https://iservices7.arcgis.com/eO5e0cIdutJqUkDY/arcgis/rest/services/IDW/ImageServer";
+  const TILE_URL  = "https://tiles.arcgis.com/tiles/eO5e0cIdutJqUkDY/arcgis/rest/services/IDW_clipped/MapServer";
   const BORDER_URL = "https://services7.arcgis.com/eO5e0cIdutJqUkDY/arcgis/rest/services/Border/FeatureServer";
 
-  const idwLayer = new ImageryTileLayer({
-    url: IMAGE_SERVER_URL,
-    opacity: 1,
-    visible: false
-  });
+  const idwLayer = new TileLayer({ url: TILE_URL, opacity: 1, visible: false });
 
   const borderLayer = new FeatureLayer({
     url: BORDER_URL,
@@ -150,7 +150,7 @@ require([
       symbol: {
         type: "simple-fill",
         color: [0, 0, 0, 0],
-        outline: { color: [30, 30, 28, 0.7], width: 1.5 }
+        outline: { color: [30, 30, 28, 0.75], width: 1.5 }
       }
     }
   });
@@ -169,34 +169,67 @@ require([
   });
 
   const lensC = document.getElementById("lens-canvas");
-  const mw = document.getElementById("map-wrap");
+  const mw    = document.getElementById("map-wrap");
   const priceReadout = document.getElementById("price-readout");
-  const priceInner = document.getElementById("price-readout-inner");
-  const hint = document.getElementById("hint");
+  const priceInner   = document.getElementById("price-readout-inner");
+  const hint  = document.getElementById("hint");
 
   let lensR = 80;
   let mouseX = -1, mouseY = -1;
   let hintHidden = false;
-  let identifying = false;
 
   function resize() {
-    lensC.width = mw.offsetWidth;
+    lensC.width  = mw.offsetWidth;
     lensC.height = mw.offsetHeight;
   }
   resize();
   window.addEventListener("resize", resize);
+
+  // Map pixel RGB from the ArcGIS IDW stretched raster symbology to price
+  // Color ramp: dark green (1750) → yellow-green → yellow → orange → salmon/pink (8861)
+  // We use the green and red channels as primary discriminators
+  function rgbToPrice(r, g, b) {
+    const PRICE_MIN = 1750;
+    const PRICE_MAX = 8861;
+
+    // Ignore nodata / basemap pixels (very light or white)
+    const brightness = (r + g + b) / 3;
+    if (brightness > 230) return null;
+
+    // Normalize
+    const rn = r / 255, gn = g / 255, bn = b / 255;
+
+    // Heuristic mapping based on the ArcGIS green→salmon ramp:
+    // Low prices:  high green, low red  → t near 0
+    // High prices: high red+pink, low green → t near 1
+    // Yellow middle: high r+g, low b
+    let t;
+    if (gn > rn && gn > 0.35) {
+      // Green dominant = low prices
+      t = Math.max(0, (1 - gn) * 0.5);
+    } else if (rn > 0.75 && gn > 0.5) {
+      // Yellow zone = mid prices
+      t = 0.4 + (1 - gn) * 0.4;
+    } else {
+      // Orange to pink/salmon = high prices
+      t = 0.65 + rn * 0.35;
+    }
+
+    t = Math.min(1, Math.max(0, t));
+    return Math.round(PRICE_MIN + t * (PRICE_MAX - PRICE_MIN));
+  }
 
   function drawLens() {
     const ctx = lensC.getContext("2d");
     ctx.clearRect(0, 0, lensC.width, lensC.height);
     if (mouseX < 0) return;
 
-    const R = lensR;
+    const R  = lensR;
     const mx = mouseX, my = mouseY;
 
     idwLayer.visible = true;
 
-    view.takeScreenshot({ quality: 90, width: lensC.width, height: lensC.height })
+    view.takeScreenshot({ quality: 95, width: lensC.width, height: lensC.height })
       .then(function(screenshot) {
         idwLayer.visible = false;
 
@@ -204,6 +237,7 @@ require([
         img.onload = function() {
           ctx.clearRect(0, 0, lensC.width, lensC.height);
 
+          // Draw IDW clipped to lens circle
           ctx.save();
           ctx.beginPath();
           ctx.arc(mx, my, R, 0, Math.PI * 2);
@@ -211,6 +245,29 @@ require([
           ctx.drawImage(img, 0, 0);
           ctx.restore();
 
+          // Sample center pixel for price estimate
+          const off = document.createElement("canvas");
+          off.width = lensC.width; off.height = lensC.height;
+          const octx = off.getContext("2d");
+          octx.drawImage(img, 0, 0);
+
+          // Sample average of small area around center for stability
+          let rSum = 0, gSum = 0, bSum = 0, n = 0;
+          const sampleR = 4;
+          for (let sy = -sampleR; sy <= sampleR; sy++) {
+            for (let sx = -sampleR; sx <= sampleR; sx++) {
+              const px = octx.getImageData(Math.round(mx + sx), Math.round(my + sy), 1, 1).data;
+              rSum += px[0]; gSum += px[1]; bSum += px[2]; n++;
+            }
+          }
+          const price = rgbToPrice(rSum/n, gSum/n, bSum/n);
+          if (price !== null) {
+            priceInner.innerHTML = `~${price.toLocaleString("sr-RS")} <span>€/m²</span>`;
+          } else {
+            priceInner.innerHTML = `— <span>€/m²</span>`;
+          }
+
+          // Lens ring
           ctx.beginPath();
           ctx.arc(mx, my, R, 0, Math.PI * 2);
           ctx.strokeStyle = "rgba(255,255,255,0.88)";
@@ -220,6 +277,7 @@ require([
           ctx.lineWidth = 0.5;
           ctx.stroke();
 
+          // Crosshair
           ctx.save();
           ctx.strokeStyle = "rgba(255,255,255,0.65)";
           ctx.lineWidth = 1;
@@ -229,6 +287,7 @@ require([
           ctx.stroke();
           ctx.restore();
 
+          // Center dot
           ctx.beginPath();
           ctx.arc(mx, my, 2.5, 0, Math.PI * 2);
           ctx.fillStyle = "white";
@@ -238,32 +297,7 @@ require([
       });
   }
 
-  function identifyPrice(mapPoint) {
-    if (identifying) return;
-    identifying = true;
-
-    idwLayer.identify(mapPoint)
-      .then(function(result) {
-        identifying = false;
-        if (result && result.value !== null && result.value !== undefined) {
-          const price = Math.round(parseFloat(result.value));
-          if (!isNaN(price) && price > 0 && price < 99999) {
-            priceInner.innerHTML = `${price.toLocaleString("sr-RS")} <span>€/m²</span>`;
-          } else {
-            priceInner.innerHTML = `— <span>€/m²</span>`;
-          }
-        } else {
-          priceInner.innerHTML = `— <span>€/m²</span>`;
-        }
-      })
-      .catch(function() {
-        identifying = false;
-        priceInner.innerHTML = `— <span>€/m²</span>`;
-      });
-  }
-
   let drawTimeout = null;
-  let identifyTimeout = null;
 
   mw.addEventListener("mousemove", function(e) {
     const rect = mw.getBoundingClientRect();
@@ -272,7 +306,7 @@ require([
 
     priceReadout.style.display = "block";
     priceReadout.style.left = mouseX + "px";
-    priceReadout.style.top = mouseY + "px";
+    priceReadout.style.top  = mouseY + "px";
 
     if (!hintHidden) {
       hint.classList.add("hidden");
@@ -281,12 +315,6 @@ require([
 
     if (drawTimeout) clearTimeout(drawTimeout);
     drawTimeout = setTimeout(drawLens, 80);
-
-    if (identifyTimeout) clearTimeout(identifyTimeout);
-    identifyTimeout = setTimeout(function() {
-      const mapPoint = view.toMap({ x: mouseX, y: mouseY });
-      if (mapPoint) identifyPrice(mapPoint);
-    }, 120);
   });
 
   mw.addEventListener("mouseleave", function() {
@@ -300,7 +328,7 @@ require([
   });
 
   const lensSlider = document.getElementById("lens-slider");
-  const lensVal = document.getElementById("lens-val");
+  const lensVal    = document.getElementById("lens-val");
   lensSlider.addEventListener("input", function() {
     lensR = parseInt(this.value);
     lensVal.textContent = lensR;
