@@ -211,30 +211,45 @@
     return val;
   }
 
+  var lensBuffer = document.createElement("canvas");
+  var lensBufferCtx = lensBuffer.getContext("2d", { willReadFrequently: true });
+  var drawRequested = false;
+
+  function requestDrawLens() {
+    if (drawRequested) return;
+    drawRequested = true;
+    requestAnimationFrame(function() {
+      drawRequested = false;
+      drawLens();
+    });
+  }
+
   function drawLens() {
     var ctx = lensC.getContext("2d");
     ctx.clearRect(0, 0, lensC.width, lensC.height);
     if (mouseX < 0 || !georasterData) return;
 
     var R = lensR, mx = mouseX, my = mouseY;
-    var mwRect = mw.getBoundingClientRect();
+    var size = R * 2;
+    var step = R > 120 ? 4 : 3;
 
-    // Get map bounds visible on screen
-    var mapBounds = map.getBounds();
-    var mapSize   = map.getSize();
+    if (lensBuffer.width !== size || lensBuffer.height !== size) {
+      lensBuffer.width = size;
+      lensBuffer.height = size;
+    }
 
-    // Draw raster pixels inside lens circle
-    // For each pixel in the lens area, compute lat/lng and look up raster value
-    var step = 2; // pixels per sample (performance vs quality)
-    var imgData = ctx.createImageData(lensC.width, lensC.height);
+    var imgData = lensBufferCtx.createImageData(size, size);
 
-    for (var py = Math.floor(my - R); py <= Math.ceil(my + R); py += step) {
-      for (var px = Math.floor(mx - R); px <= Math.ceil(mx + R); px += step) {
-        var dx = px - mx, dy = py - my;
-        if (dx*dx + dy*dy > R*R) continue;
+    for (var y = 0; y < size; y += step) {
+      for (var x = 0; x < size; x += step) {
+        var dx = x - R;
+        var dy = y - R;
+        if (dx * dx + dy * dy > R * R) continue;
+
+        var px = Math.round(mx - R + x);
+        var py = Math.round(my - R + y);
         if (px < 0 || py < 0 || px >= lensC.width || py >= lensC.height) continue;
 
-        // Convert canvas pixel to lat/lng
         var latLng = map.containerPointToLatLng([px, py]);
         var val = getValueAtLatLng(latLng.lat, latLng.lng);
         if (val === null) continue;
@@ -242,46 +257,43 @@
         var c = priceToColor(val);
         if (!c) continue;
 
-        for (var oy = 0; oy < step && py+oy < lensC.height; oy++) {
-          for (var ox = 0; ox < step && px+ox < lensC.width; ox++) {
-            var ddx = (px+ox) - mx, ddy = (py+oy) - my;
-            if (ddx*ddx + ddy*ddy > R*R) continue;
-            var idx = ((py+oy) * lensC.width + (px+ox)) * 4;
-            imgData.data[idx]   = c[0];
-            imgData.data[idx+1] = c[1];
-            imgData.data[idx+2] = c[2];
-            imgData.data[idx+3] = c[3];
+        for (var oy = 0; oy < step && y + oy < size; oy++) {
+          for (var ox = 0; ox < step && x + ox < size; ox++) {
+            var ddx = x + ox - R;
+            var ddy = y + oy - R;
+            if (ddx * ddx + ddy * ddy > R * R) continue;
+            var idx = ((y + oy) * size + (x + ox)) * 4;
+            imgData.data[idx] = c[0];
+            imgData.data[idx + 1] = c[1];
+            imgData.data[idx + 2] = c[2];
+            imgData.data[idx + 3] = c[3];
           }
         }
       }
     }
-    ctx.putImageData(imgData, 0, 0);
 
-    // Get price at center
+    lensBufferCtx.putImageData(imgData, 0, 0);
+    ctx.drawImage(lensBuffer, mx - R, my - R);
+
     var centerLatLng = map.containerPointToLatLng([mx, my]);
     var centerVal = getValueAtLatLng(centerLatLng.lat, centerLatLng.lng);
     priceInner.innerHTML = centerVal !== null
-      ? "~" + Math.round(centerVal).toLocaleString("sr-RS") + " <span>\u20ac/m\u00b2</span>"
-      : "\u2014 <span>\u20ac/m\u00b2</span>";
+      ? "~" + Math.round(centerVal).toLocaleString("sr-RS") + " <span>€/m²</span>"
+      : "— <span>€/m²</span>";
 
-    // Ring
-    ctx.beginPath(); ctx.arc(mx, my, R, 0, Math.PI*2);
+    ctx.beginPath(); ctx.arc(mx, my, R, 0, Math.PI * 2);
     ctx.strokeStyle = "rgba(255,255,255,0.88)"; ctx.lineWidth = 2; ctx.stroke();
     ctx.strokeStyle = "rgba(0,0,0,0.15)"; ctx.lineWidth = 0.5; ctx.stroke();
 
-    // Crosshair
     ctx.save(); ctx.strokeStyle = "rgba(255,255,255,0.65)"; ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(mx-10, my); ctx.lineTo(mx+10, my);
-    ctx.moveTo(mx, my-10); ctx.lineTo(mx, my+10);
+    ctx.moveTo(mx - 10, my); ctx.lineTo(mx + 10, my);
+    ctx.moveTo(mx, my - 10); ctx.lineTo(mx, my + 10);
     ctx.stroke(); ctx.restore();
 
-    // Center dot
-    ctx.beginPath(); ctx.arc(mx, my, 2.5, 0, Math.PI*2);
+    ctx.beginPath(); ctx.arc(mx, my, 2.5, 0, Math.PI * 2);
     ctx.fillStyle = "white"; ctx.fill();
   }
-
-  var drawTimeout = null;
 
   mw.addEventListener("mousemove", function(e) {
     var rect = mw.getBoundingClientRect();
@@ -294,8 +306,7 @@
 
     if (!hintHidden) { hint.classList.add("hidden"); hintHidden = true; }
 
-    if (drawTimeout) clearTimeout(drawTimeout);
-    drawTimeout = setTimeout(drawLens, 30);
+    requestDrawLens();
   });
 
   mw.addEventListener("mouseleave", function() {
@@ -305,7 +316,7 @@
   });
 
   map.on("move zoom", function() {
-    if (mouseX >= 0) { if (drawTimeout) clearTimeout(drawTimeout); drawTimeout = setTimeout(drawLens, 60); }
+    if (mouseX >= 0) requestDrawLens();
   });
 
   var lensSlider = document.getElementById("lens-slider");
@@ -313,7 +324,7 @@
   lensSlider.addEventListener("input", function() {
     lensR = parseInt(this.value);
     lensVal.textContent = lensR;
-    if (mouseX >= 0) drawLens();
+    if (mouseX >= 0) requestDrawLens();
   });
 </script>
 </body>
