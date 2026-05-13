@@ -153,7 +153,7 @@
   var georasterData = null;
   var georasterLayer = null;
 
-  fetch("idw.tif")
+  fetch("IDW.tif")
     .then(function(r) { return r.arrayBuffer(); })
     .then(function(buf) { return parseGeoraster(buf); })
     .then(function(gr) {
