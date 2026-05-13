@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Real Estate Prices | Vračar 2025</title>
+  <title>Real Estate Prices | Vračar 2026</title>
+  <link rel="icon" href="data:,">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -29,13 +30,6 @@
     #header-left { display: flex; flex-direction: column; gap: 1px; }
     #header h1 { font-size: 13px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
     #header p { font-size: 11px; color: var(--c-muted); font-family: var(--font-mono); }
-    #controls { display: flex; align-items: center; gap: 28px; }
-    .control-group { display: flex; flex-direction: column; gap: 4px; }
-    .control-label { font-size: 10px; font-family: var(--font-mono); color: var(--c-muted); text-transform: uppercase; letter-spacing: 0.06em; }
-    .control-row { display: flex; align-items: center; gap: 10px; }
-    .control-value { font-size: 13px; font-family: var(--font-mono); font-weight: 500; min-width: 36px; text-align: right; }
-    input[type="range"] { -webkit-appearance: none; appearance: none; height: 3px; background: var(--c-border); border-radius: 2px; outline: none; cursor: pointer; width: 120px; }
-    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--c-text); border: 2px solid var(--c-surface); box-shadow: 0 0 0 1px var(--c-text); cursor: pointer; }
 
     #map-wrap { position: relative; flex: 1; cursor: none; }
     #map { position: absolute; inset: 0; z-index: 1; }
@@ -64,18 +58,10 @@
 <div id="app">
   <div id="header">
     <div id="header-left">
-      <h1>Real Estate Prices | Vračar 2025</h1>
+      <h1>Real Estate Prices | Vračar 2026</h1>
       <p>IDW interpolation · hover to explore</p>
     </div>
-    <div id="controls">
-      <div class="control-group">
-        <div class="control-label">Lens size</div>
-        <div class="control-row">
-          <input type="range" id="lens-slider" min="40" max="160" step="5" value="80">
-          <span class="control-value" id="lens-val">80</span>
-        </div>
-      </div>
-    </div>
+
   </div>
   <div id="map-wrap">
     <div id="map"></div>
@@ -134,7 +120,13 @@
   }
 
   // Leaflet map
-  var map = L.map("map", { zoomControl: true, attributionControl: true }).setView([44.800, 20.480], 14);
+  var map = L.map("map", { zoomControl: true, attributionControl: true });
+
+  var INITIAL_BOUNDS = L.latLngBounds(
+    [44.79336928629314, 20.4653336540752],
+    [44.801303367792016, 20.487926078948487]
+  );
+  map.fitBounds(INITIAL_BOUNDS, { padding: [20, 20] });
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     subdomains: ["a","b","c"], maxZoom: 19,
     attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>'
@@ -145,7 +137,7 @@
     .then(function(r) { return r.json(); })
     .then(function(data) {
       L.geoJSON(data, {
-        style: { color: "#1a1a18", weight: 2, fillOpacity: 0, opacity: 0.8 }
+        style: { color: "#1a1a18", weight: 4, fillOpacity: 0, opacity: 0.95 }
       }).addTo(map);
     });
 
@@ -192,7 +184,7 @@
   var priceReadout = document.getElementById("price-readout");
   var priceInner   = document.getElementById("price-readout-inner");
   var hint  = document.getElementById("hint");
-  var lensR = 80, mouseX = -1, mouseY = -1, hintHidden = false;
+  var lensR = 40, mouseX = -1, mouseY = -1, hintHidden = false;
 
   function resize() { lensC.width = mw.offsetWidth; lensC.height = mw.offsetHeight; }
   resize();
