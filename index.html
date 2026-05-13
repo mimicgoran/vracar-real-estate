@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Real Estate Prices — Vračar 2025</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -38,11 +38,7 @@
     input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--c-text); border: 2px solid var(--c-surface); box-shadow: 0 0 0 1px var(--c-text); cursor: pointer; }
 
     #map-wrap { position: relative; flex: 1; cursor: none; }
-
-    /* Two stacked maps */
-    #map-base { position: absolute; inset: 0; z-index: 1; }
-    #map-idw  { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-
+    #map { position: absolute; inset: 0; z-index: 1; }
     #lens-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
 
     #legend {
@@ -61,8 +57,7 @@
     #hint { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 20; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 20px; padding: 6px 14px; font-size: 11px; color: var(--c-muted); font-family: var(--font-mono); pointer-events: none; transition: opacity 0.4s; }
     #hint.hidden { opacity: 0; }
 
-    /* Hide IDW map tiles visually — we only draw them on canvas inside lens */
-    #map-idw { opacity: 0; }
+    .leaflet-attribution-flag { display: none !important; }
   </style>
 </head>
 <body>
@@ -83,8 +78,7 @@
     </div>
   </div>
   <div id="map-wrap">
-    <div id="map-base"></div>
-    <div id="map-idw"></div>
+    <div id="map"></div>
     <canvas id="lens-canvas"></canvas>
     <div id="legend">
       <div class="leg-title">€ / m²</div>
@@ -97,38 +91,92 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://unpkg.com/georaster@1.6.0/georaster.browser.bundle.js"></script>
+<script src="https://unpkg.com/georaster-layer-for-leaflet@2.3.1/dist/georaster-layer-for-leaflet.min.js"></script>
+
 <script>
-  var IDW_URL    = "https://tiles.arcgis.com/tiles/eO5e0cIdutJqUkDY/arcgis/rest/services/IDW_clipped/MapServer/tile/{z}/{y}/{x}";
-  var BORDER_URL = "https://services7.arcgis.com/eO5e0cIdutJqUkDY/arcgis/rest/services/Border/FeatureServer/0/query?where=1%3D1&outFields=*&f=geojson";
+  // Extent from Border GeoJSON
+  var BOUNDS = {
+    minLng: 20.463511124853436,
+    maxLng: 20.497777009078433,
+    minLat: 44.790249145103495,
+    maxLat: 44.81048992309964
+  };
 
-  var center = [44.798, 20.472];
+  var PRICE_MIN = 1750, PRICE_MAX = 8861;
 
-  // Base map — OSM
-  var mapBase = L.map("map-base", { zoomControl: true, attributionControl: false }).setView(center, 14);
+  // Color scale matching ArcGIS IDW ramp: dark green → yellow-green → yellow → orange → salmon
+  function priceToColor(value) {
+    if (value === null || value === undefined || isNaN(value)) return null;
+    if (value > 99990) return null; // nodata
+    var t = Math.min(1, Math.max(0, (value - PRICE_MIN) / (PRICE_MAX - PRICE_MIN)));
+    var stops = [
+      [0.00, [74, 124, 63]],
+      [0.20, [122, 182, 72]],
+      [0.40, [200, 204, 62]],
+      [0.60, [232, 184, 75]],
+      [0.80, [212, 135, 106]],
+      [1.00, [196, 120, 138]]
+    ];
+    for (var i = 0; i < stops.length - 1; i++) {
+      if (t >= stops[i][0] && t <= stops[i+1][0]) {
+        var s = (t - stops[i][0]) / (stops[i+1][0] - stops[i][0]);
+        var c0 = stops[i][1], c1 = stops[i+1][1];
+        return [
+          Math.round(c0[0] + s*(c1[0]-c0[0])),
+          Math.round(c0[1] + s*(c1[1]-c0[1])),
+          Math.round(c0[2] + s*(c1[2]-c0[2])),
+          210
+        ];
+      }
+    }
+    return null;
+  }
+
+  // Leaflet map
+  var map = L.map("map", { zoomControl: true, attributionControl: true }).setView([44.800, 20.480], 14);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    subdomains: ["a","b","c"],
-    maxZoom: 19
-  }).addTo(mapBase);
+    subdomains: ["a","b","c"], maxZoom: 19,
+    attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>'
+  }).addTo(map);
 
-  // IDW map — synced, hidden (opacity:0 via CSS), tiles still load
-  var mapIdw = L.map("map-idw", { zoomControl: false, attributionControl: false }).setView(center, 14);
-  L.tileLayer(IDW_URL, { maxZoom: 19 }).addTo(mapIdw);
-
-  // Sync IDW map with base map
-  mapBase.on("move zoom", function() {
-    mapIdw.setView(mapBase.getCenter(), mapBase.getZoom(), { animate: false });
-  });
-
-  // Add border as GeoJSON overlay on base map
-  fetch(BORDER_URL)
+  // Border GeoJSON
+  fetch("Border.geojson")
     .then(function(r) { return r.json(); })
     .then(function(data) {
       L.geoJSON(data, {
-        style: { color: "#1a1a18", weight: 1.5, fillOpacity: 0, opacity: 0.75 }
-      }).addTo(mapBase);
+        style: { color: "#1a1a18", weight: 2, fillOpacity: 0, opacity: 0.8 }
+      }).addTo(map);
     });
 
-  // Canvas lens
+  // Load GeoTIFF
+  var georasterData = null;
+  var georasterLayer = null;
+
+  fetch("idw.tif")
+    .then(function(r) { return r.arrayBuffer(); })
+    .then(function(buf) { return parseGeoraster(buf); })
+    .then(function(gr) {
+      georasterData = gr;
+
+      // Create colored raster layer — hidden by default
+      georasterLayer = new GeoRasterLayer({
+        georaster: gr,
+        opacity: 0,  // hidden — only shown through lens
+        pixelValuesToColorFn: function(vals) {
+          var v = vals[0];
+          if (v === null || v === undefined || isNaN(v) || v > 99990) return null;
+          var c = priceToColor(v);
+          if (!c) return null;
+          return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + (c[3]/255) + ")";
+        },
+        resolution: 256
+      });
+      georasterLayer.addTo(map);
+    })
+    .catch(function(e) { console.error("Failed to load GeoTIFF:", e); });
+
+  // Canvas
   var lensC = document.getElementById("lens-canvas");
   var mw    = document.getElementById("map-wrap");
   var priceReadout = document.getElementById("price-readout");
@@ -140,61 +188,70 @@
   resize();
   window.addEventListener("resize", resize);
 
-  function rgbToPrice(r, g, b) {
-    var max = Math.max(r, g, b), min = Math.min(r, g, b);
-    var sat = max > 0 ? (max - min) / max : 0;
-    if (sat < 0.08) return null;
-    var rn = r/255, gn = g/255;
-    var t = gn >= rn ? Math.max(0, (1-gn) * 0.7) : 0.5 + rn * 0.5;
-    t = Math.min(1, Math.max(0, t));
-    return Math.round(1750 + t * (8861 - 1750));
-  }
-
-  function getIdwCanvas() {
-    // Get the Leaflet tile canvas/images from the hidden IDW map
-    var idwContainer = document.getElementById("map-idw");
-    return idwContainer;
+  // Get exact pixel value from georaster at map point
+  function getValueAtLatLng(lat, lng) {
+    if (!georasterData) return null;
+    var gr = georasterData;
+    // Convert lat/lng to raster pixel
+    var col = Math.floor((lng - gr.xmin) / gr.pixelWidth);
+    var row = Math.floor((gr.ymax - lat) / gr.pixelHeight);
+    if (col < 0 || row < 0 || col >= gr.width || row >= gr.height) return null;
+    var val = gr.values[0][row][col];
+    if (val === null || val === undefined || isNaN(val) || val > 99990) return null;
+    return val;
   }
 
   function drawLens() {
     var ctx = lensC.getContext("2d");
     ctx.clearRect(0, 0, lensC.width, lensC.height);
-    if (mouseX < 0) return;
+    if (mouseX < 0 || !georasterData) return;
 
     var R = lensR, mx = mouseX, my = mouseY;
     var mwRect = mw.getBoundingClientRect();
-    var idwEl  = document.getElementById("map-idw");
-    var idwRect = idwEl.getBoundingClientRect();
 
-    // Collect all tile images from the IDW Leaflet map
-    var tiles = idwEl.querySelectorAll(".leaflet-tile");
+    // Get map bounds visible on screen
+    var mapBounds = map.getBounds();
+    var mapSize   = map.getSize();
 
-    // Draw clipped IDW tiles onto lens canvas
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(mx, my, R, 0, Math.PI * 2);
-    ctx.clip();
+    // Draw raster pixels inside lens circle
+    // For each pixel in the lens area, compute lat/lng and look up raster value
+    var step = 2; // pixels per sample (performance vs quality)
+    var imgData = ctx.createImageData(lensC.width, lensC.height);
 
-    tiles.forEach(function(tile) {
-      if (!tile.complete || tile.naturalWidth === 0) return;
-      var tRect = tile.getBoundingClientRect();
-      var tx = tRect.left - mwRect.left;
-      var ty = tRect.top  - mwRect.top;
-      ctx.drawImage(tile, tx, ty, tRect.width, tRect.height);
-    });
+    for (var py = Math.floor(my - R); py <= Math.ceil(my + R); py += step) {
+      for (var px = Math.floor(mx - R); px <= Math.ceil(mx + R); px += step) {
+        var dx = px - mx, dy = py - my;
+        if (dx*dx + dy*dy > R*R) continue;
+        if (px < 0 || py < 0 || px >= lensC.width || py >= lensC.height) continue;
 
-    ctx.restore();
+        // Convert canvas pixel to lat/lng
+        var latLng = map.containerPointToLatLng([px, py]);
+        var val = getValueAtLatLng(latLng.lat, latLng.lng);
+        if (val === null) continue;
 
-    // Sample center pixel for price (from drawn tiles)
-    var sample = ctx.getImageData(Math.round(mx), Math.round(my), 7, 7);
-    var rS=0, gS=0, bS=0, aS=0, n=sample.data.length/4;
-    for (var i=0; i<sample.data.length; i+=4) {
-      rS+=sample.data[i]; gS+=sample.data[i+1]; bS+=sample.data[i+2]; aS+=sample.data[i+3];
+        var c = priceToColor(val);
+        if (!c) continue;
+
+        for (var oy = 0; oy < step && py+oy < lensC.height; oy++) {
+          for (var ox = 0; ox < step && px+ox < lensC.width; ox++) {
+            var ddx = (px+ox) - mx, ddy = (py+oy) - my;
+            if (ddx*ddx + ddy*ddy > R*R) continue;
+            var idx = ((py+oy) * lensC.width + (px+ox)) * 4;
+            imgData.data[idx]   = c[0];
+            imgData.data[idx+1] = c[1];
+            imgData.data[idx+2] = c[2];
+            imgData.data[idx+3] = c[3];
+          }
+        }
+      }
     }
-    var avgA = aS/n;
-    var price = avgA > 30 ? rgbToPrice(rS/n, gS/n, bS/n) : null;
-    priceInner.innerHTML = price !== null
-      ? "~" + price.toLocaleString("sr-RS") + " <span>\u20ac/m\u00b2</span>"
+    ctx.putImageData(imgData, 0, 0);
+
+    // Get price at center
+    var centerLatLng = map.containerPointToLatLng([mx, my]);
+    var centerVal = getValueAtLatLng(centerLatLng.lat, centerLatLng.lng);
+    priceInner.innerHTML = centerVal !== null
+      ? "~" + Math.round(centerVal).toLocaleString("sr-RS") + " <span>\u20ac/m\u00b2</span>"
       : "\u2014 <span>\u20ac/m\u00b2</span>";
 
     // Ring
@@ -228,7 +285,7 @@
     if (!hintHidden) { hint.classList.add("hidden"); hintHidden = true; }
 
     if (drawTimeout) clearTimeout(drawTimeout);
-    drawTimeout = setTimeout(drawLens, 60);
+    drawTimeout = setTimeout(drawLens, 30);
   });
 
   mw.addEventListener("mouseleave", function() {
@@ -237,8 +294,8 @@
     lensC.getContext("2d").clearRect(0, 0, lensC.width, lensC.height);
   });
 
-  mapBase.on("move zoom moveend", function() {
-    if (mouseX >= 0) { if (drawTimeout) clearTimeout(drawTimeout); drawTimeout = setTimeout(drawLens, 80); }
+  map.on("move zoom", function() {
+    if (mouseX >= 0) { if (drawTimeout) clearTimeout(drawTimeout); drawTimeout = setTimeout(drawLens, 60); }
   });
 
   var lensSlider = document.getElementById("lens-slider");
