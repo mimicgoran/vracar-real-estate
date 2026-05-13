@@ -29,7 +29,6 @@
     }
     #header-left { display: flex; flex-direction: column; gap: 1px; }
     #header h1 { font-size: 13px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
-    #header p { font-size: 11px; color: var(--c-muted); font-family: var(--font-mono); }
 
     #map-wrap { position: relative; flex: 1; cursor: none; }
     #map { position: absolute; inset: 0; z-index: 1; }
@@ -59,7 +58,6 @@
   <div id="header">
     <div id="header-left">
       <h1>Real Estate Prices | Vračar 2026</h1>
-      <p>IDW interpolation · hover to explore</p>
     </div>
 
   </div>
@@ -126,7 +124,8 @@
     [44.79336928629314, 20.4653336540752],
     [44.801303367792016, 20.487926078948487]
   );
-  map.fitBounds(INITIAL_BOUNDS, { padding: [20, 20] });
+  map.setView([44.79734, 20.47663], 16);
+  map.setMaxBounds(INITIAL_BOUNDS.pad(0.35));
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     subdomains: ["a","b","c"], maxZoom: 19,
     attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>'
@@ -137,13 +136,12 @@
     .then(function(r) { return r.json(); })
     .then(function(data) {
       L.geoJSON(data, {
-        style: { color: "#1a1a18", weight: 4, fillOpacity: 0, opacity: 0.95 }
+        style: { color: "#1a1a18", weight: 6, fillOpacity: 0, opacity: 0.95 }
       }).addTo(map);
     });
 
   // Load GeoTIFF
   var georasterData = null;
-  var georasterLayer = null;
 
   fetch("IDW.tif")
     .then(function(r) { return r.arrayBuffer(); })
@@ -160,21 +158,6 @@
     })
     .then(function(gr) {
       georasterData = gr;
-
-      // Create colored raster layer — hidden by default
-      georasterLayer = new GeoRasterLayer({
-        georaster: gr,
-        opacity: 0,  // hidden, only shown through lens
-        pixelValuesToColorFn: function(vals) {
-          var v = vals[0];
-          if (v === null || v === undefined || isNaN(v) || v > 99990) return null;
-          var c = priceToColor(v);
-          if (!c) return null;
-          return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + (c[3]/255) + ")";
-        },
-        resolution: 256
-      });
-      georasterLayer.addTo(map);
     })
     .catch(function(e) { console.error("Failed to load GeoTIFF:", e); });
 
@@ -311,13 +294,6 @@
     if (mouseX >= 0) requestDrawLens();
   });
 
-  var lensSlider = document.getElementById("lens-slider");
-  var lensVal    = document.getElementById("lens-val");
-  lensSlider.addEventListener("input", function() {
-    lensR = parseInt(this.value);
-    lensVal.textContent = lensR;
-    if (mouseX >= 0) requestDrawLens();
-  });
 </script>
 </body>
 </html>
