@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Real Estate Prices — Vračar 2025</title>
+  <title>Real Estate Prices | Vračar 2025</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -64,7 +64,7 @@
 <div id="app">
   <div id="header">
     <div id="header-left">
-      <h1>Real Estate Prices — Vračar 2025</h1>
+      <h1>Real Estate Prices | Vračar 2025</h1>
       <p>IDW interpolation · hover to explore</p>
     </div>
     <div id="controls">
@@ -85,14 +85,14 @@
       <div class="leg-bar"></div>
       <div class="leg-labels"><span>1.750</span><span>5.300</span><span>8.861</span></div>
     </div>
-    <div id="price-readout"><div id="price-readout-inner">— <span>€/m²</span></div></div>
+    <div id="price-readout"><div id="price-readout-inner">N/A <span>€/m²</span></div></div>
     <div id="hint">Move cursor over the map to reveal prices</div>
   </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/georaster@1.6.0/georaster.browser.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/georaster-layer-for-leaflet@2.3.1/dist/georaster-layer-for-leaflet.min.js"></script>
+<script src="https://unpkg.com/georaster"></script>
+<script src="https://unpkg.com/georaster-layer-for-leaflet"></script>
 
 <script>
   // Extent from Border GeoJSON
@@ -155,14 +155,24 @@
 
   fetch("IDW.tif")
     .then(function(r) { return r.arrayBuffer(); })
-    .then(function(buf) { return parseGeoraster(buf); })
+    .then(function(buf) {
+      var parser =
+        window.parseGeoraster ||
+        (window.georaster && window.georaster.parseGeoraster);
+
+      if (!parser) {
+        throw new Error("GeoRaster parser was not loaded. Check the georaster script URL.");
+      }
+
+      return parser(buf);
+    })
     .then(function(gr) {
       georasterData = gr;
 
       // Create colored raster layer — hidden by default
       georasterLayer = new GeoRasterLayer({
         georaster: gr,
-        opacity: 0,  // hidden — only shown through lens
+        opacity: 0,  // hidden, only shown through lens
         pixelValuesToColorFn: function(vals) {
           var v = vals[0];
           if (v === null || v === undefined || isNaN(v) || v > 99990) return null;
